@@ -1,0 +1,4 @@
+interface:
+  display_name: "프로젝트 업무 이어가기"
+  short_description: "프로젝트 맥락과 최신 발행본을 확인하고 다음 업무를 안전하게 이어갑니다."
+  default_prompt: "Use $continue-project-work to 이 프로젝트의 현재 상태와 최신 발행본을 확인하고 다음 업무를 안전하게 이어가세요."

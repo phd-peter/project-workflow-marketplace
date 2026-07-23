@@ -1,0 +1,4 @@
+interface:
+  display_name: "프로젝트 INBOX 분류"
+  short_description: "INBOX 자료의 분류안을 만들고 승인된 이동만 적용합니다."
+  default_prompt: "Use $triage-project-inbox to inspect 01_INBOX and propose exact destinations without moving files."

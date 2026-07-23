@@ -1,0 +1,4 @@
+interface:
+  display_name: "프로젝트 소통 기록"
+  short_description: "소통 원문을 보존하고 결론 기록과 승인형 SOT 반영안을 준비합니다."
+  default_prompt: "Use $record-project-communication to 오늘의 프로젝트 소통 원문을 보존하고 필요한 결론 기록을 준비하세요."

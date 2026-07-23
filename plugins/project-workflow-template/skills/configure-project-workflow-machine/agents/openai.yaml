@@ -1,0 +1,4 @@
+interface:
+  display_name: "프로젝트 전역 설정 도우미"
+  short_description: "전역 AGENTS와 project_scout 설정의 병합안을 제안합니다"
+  default_prompt: "Use $configure-project-workflow-machine to 이 컴퓨터의 프로젝트 전역 설정 병합안을 보여주세요."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "SOT 승인형 업데이트"
+  short_description: "SOT 복제본을 수정해 diff를 보여주고 승인 후에만 공식본에 적용합니다."
+  default_prompt: "Use $update-project-sot to 공식 SOT를 반영안으로 복제해 수정하고, 표시된 diff를 승인한 뒤에만 적용하세요."

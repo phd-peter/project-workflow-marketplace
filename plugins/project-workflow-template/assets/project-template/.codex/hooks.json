@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "zsh -c 'd=${PWD:A}; while [[ \"$d\" != \"/\" && ! -f \"$d/.codex/hooks/check-sot-drift.sh\" ]]; do d=${d:h}; done; if [[ -f \"$d/.codex/hooks/check-sot-drift.sh\" ]]; then exec zsh \"$d/.codex/hooks/check-sot-drift.sh\"; else print -u2 -- \"check-sot-drift.sh not found\"; exit 1; fi'",
+            "commandWindows": "pwsh -NoProfile -Command '$d = (Get-Location).Path; while ($true) { $script = Join-Path $d \".codex\\hooks\\check-sot-drift.ps1\"; if (Test-Path -LiteralPath $script) { & $script; exit 0 }; $parent = Split-Path -Parent $d; if ([string]::IsNullOrEmpty($parent) -or $parent -eq $d) { Write-Error \"check-sot-drift.ps1 not found\"; exit 1 }; $d = $parent }'",
+            "timeout": 30,
+            "statusMessage": "SOT 정합성을 확인하는 중"
+          }
+        ]
+      }
+    ]
+  }
+}

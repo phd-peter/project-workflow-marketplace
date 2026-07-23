@@ -1,0 +1,4 @@
+interface:
+  display_name: "프로젝트 교훈 남기기"
+  short_description: "프로젝트 근거에서 재사용 가능한 지식 후보를 별도 파일로 축적합니다."
+  default_prompt: "Use $capture-project-learning to 이 프로젝트에서 재사용할 지식 후보를 골라 06_KNOWLEDGE에 기록하세요."

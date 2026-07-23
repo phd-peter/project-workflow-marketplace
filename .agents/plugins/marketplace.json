@@ -1,0 +1,20 @@
+{
+  "name": "project-workflow",
+  "interface": {
+    "displayName": "Project Workflow"
+  },
+  "plugins": [
+    {
+      "name": "project-workflow-template",
+      "source": {
+        "source": "local",
+        "path": "./plugins/project-workflow-template"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
