@@ -63,7 +63,7 @@ Use only sections supported by the evidence:
 
 Label phone notes and unconfirmed reconstructions as `기록자 메모` or `상대 확인 전`. Distinguish verified source facts, working assumptions, and AI conclusions. Do not record irrelevant greetings or routine status sharing.
 
-When communication confirms that a meeting artifact was sent or officially shared, keep the exact issued artifact in a new `04_OUTPUT/OUTNN_yyyy-mm-dd_topic` folder. Keep meeting records in `05_MEETING` and reference the issued path from meeting Markdown; do not duplicate the issued artifact there.
+When communication confirms that a meeting artifact was sent or officially shared, keep the exact issued artifact in a new `04_OUTPUT/OUTNN_yyyy-mm-dd_topic` folder. During parallel work, only the designated `04_OUTPUT` integrator/writer may perform that write; other workers must hand off the artifact and supporting evidence from their distinct `WNN`. Keep meeting records in `05_MEETING` and reference the issued path from meeting Markdown; do not duplicate the issued artifact there.
 
 ## Validation
 
@@ -75,4 +75,5 @@ When communication confirms that a meeting artifact was sent or officially share
 - Confirm the `<folder-name>_summary.md` filename follows the folder rule and is UTF-8.
 - Confirm each bundle has a summary only when its own evidence meets the materiality threshold.
 - Confirm no SOT file changed unless the separate SOT approval gate completed.
+- Confirm parallel workstreams used distinct `WNN` folders and only the designated integrator wrote to `04_OUTPUT`.
 - Confirm every officially sent or shared meeting artifact is stored in `04_OUTPUT` and only referenced from `05_MEETING`.

@@ -9,7 +9,7 @@ Use the bundled deterministic script. The default migration replaces only `AGENT
 
 ## Audit and migrate
 
-1. Resolve the target to an absolute path and locate the plugin root two directories above this `SKILL.md`.
+1. Resolve the target to an absolute path, confirm it is the existing project's single root rather than a `WNN` or another child folder, and locate the plugin root two directories above this `SKILL.md`.
 2. Run the wrapper without `--apply`:
    - Windows: `scripts/project-workflow.ps1 migrate --target <absolute-target>`
    - macOS: `scripts/project-workflow.sh migrate --target <absolute-target>`
@@ -32,9 +32,10 @@ Use the bundled deterministic script. The default migration replaces only `AGENT
 
 ## Invariants
 
+- Target one project root only; never create or migrate a nested independent project inside another project.
 - Never change `SOT`, `01_INBOX`, `02_SOURCE`, `03_WORK`, `03_WORKS`, `04_OUTPUT`, `05_MEETING`, or `06_KNOWLEDGE`.
 - Back up before replacing and verify copied backups by SHA-256.
-- Require the returned fingerprint during apply.
+- Require the returned fingerprint during apply. It binds the target, selected options, external backup root, current component snapshot, template version, template content digest, and workflow implementation digest.
 - Reject a backup inside the target workspace.
 - Never delete or overwrite prior backups.
 - Back up the entire old `.agents/skills` directory before replacement.

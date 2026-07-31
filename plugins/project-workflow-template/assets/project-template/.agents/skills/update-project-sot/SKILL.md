@@ -7,6 +7,8 @@ description: "Create, review, revise, approve, archive, apply, discard, or resto
 
 ## File Layout
 
+Use these paths only at the single project root. Never create another official SOT for a `WNN` or other child folder.
+
 Use the following fixed structure:
 
 - official SOT: `SOT/SourceOfTruth.md`
@@ -28,6 +30,8 @@ Never create, edit, replace, move, rename, or delete the official SOT before the
 
 Treat a request to update the SOT as permission to inspect evidence and prepare a review copy. Do not treat it as permission to change the official SOT.
 
+Allow exactly one designated SOT integrator/writer at a time to edit the active review copy. Parallel workers must keep proposals and evidence in their distinct `03_WORK/WNN_yyyy-mm-dd_topic` folders and treat the official SOT, active review copy, and history as read-only.
+
 Bind approval to:
 
 - the official SOT path
@@ -41,7 +45,7 @@ Use UTF-8 for every read and write.
 
 ## Initial SOT
 
-The copied template may contain an uninitialized placeholder SOT. Treat it as uninitialized only when it still contains template markers such as `[프로젝트명]`, `Last updated: YYYY-MM-DD`, and bracketed example entries throughout the document.
+The initialized workspace may contain an uninitialized placeholder SOT. Treat it as uninitialized only when it still contains template markers such as `Project ID: [stable-project-id]`, `Project name: [프로젝트명]`, `Workspace type: standard-project`, `Company workspace ID: [company-workspace-id | none]`, `Status: [planned | active | blocked | on-hold | completed | cancelled]`, `Owner: [owner]`, `Last updated: YYYY-MM-DD`, and bracketed example entries throughout the document.
 
 - The human may directly replace the placeholder once. This direct human initialization does not require a review copy or history snapshot.
 - When the human asks Codex to initialize it, follow the complete review-copy and approval workflow. Do not edit the placeholder official path directly.
@@ -115,13 +119,15 @@ Do not begin an unrelated SOT proposal until the active review copy is resolved.
 3. Classify it as an uninitialized placeholder, a partially initialized file, or an initialized official SOT.
 4. Inspect only evidence relevant to the requested update.
 5. Determine whether the official SOT materially needs to change.
-6. Preserve the canonical bilingual SOT structure and useful content.
+6. Preserve the fixed identity field names and order, the canonical bilingual SOT structure, and useful content. Keep `Workspace type: standard-project`.
 7. Preserve conflicts and unknowns instead of silently resolving them.
 8. Confirm that referenced evidence paths exist.
 
 If no material change is needed, do not create a review copy. Report why the official SOT remains current.
 
 ## Phase 2: Create the Review Copy
+
+Only the designated SOT integrator/writer may perform this phase. If another writer is active or ownership is unclear, stop and resolve the handoff before editing.
 
 1. Create `SOT/REVIEW` if it does not exist.
 2. Resolve any existing active review copy according to the Existing Review Copy Check.
@@ -334,6 +340,9 @@ After applying an approved review copy, verify:
 
 - `SOT/SourceOfTruth.md` exists
 - the official SOT is readable UTF-8 Markdown
+- the identity block contains exactly these fields in order: `Project ID`, `Project name`, `Workspace type`, `Company workspace ID`, `Status`, `Owner`, `Last updated`
+- `Workspace type` is `standard-project`, and `Project ID` remains stable after initialization
+- initialized `Status` is one of `planned`, `active`, `blocked`, `on-hold`, `completed`, or `cancelled`
 - the official SOT matches the approved review copy before cleanup
 - the history snapshot matches the pre-update official SOT, or the approved base was verified as an uninitialized placeholder and correctly skipped
 - every cited local evidence path exists
@@ -357,7 +366,17 @@ Report:
 
 ## SOT Content Model
 
-Use one human-maintained official SOT with this canonical bilingual section order:
+Use one human-maintained official SOT. Keep this fixed identity block before the sections, with the field names and order unchanged:
+
+1. `Project ID`
+2. `Project name`
+3. `Workspace type` — fixed value: `standard-project`
+4. `Company workspace ID`
+5. `Status` — allowed values: `planned`, `active`, `blocked`, `on-hold`, `completed`, `cancelled`
+6. `Owner`
+7. `Last updated`
+
+Then keep this canonical bilingual section order:
 
 1. `목적 (Purpose)`
 2. `범위와 주요 사실 (Scope and Verified Facts)`
@@ -382,12 +401,14 @@ Store reusable learning candidates separately under `06_KNOWLEDGE/CANDIDATES`; n
 - Mark filename- or timestamp-based conclusions as inferences.
 - Preserve conflicting claims until the human resolves them.
 - Treat only `SOT/SourceOfTruth.md` as official.
+- Treat the root SOT as the only project-level SOT; never create an independent child-project SOT.
 - Treat `SOT/REVIEW` as non-official.
 - Treat `SOT/HISTORY` as immutable official-version history.
 
 ## Failure Policy
 
 - If the latest state is unclear, list candidates and evidence instead of guessing.
+- If more than one writer is editing the active review copy, stop and require a single integrator handoff.
 - If sources conflict, preserve the conflict in the review copy.
 - If approval is missing or ambiguous, keep the official SOT unchanged.
 - If an unresolved active review copy exists, do not overwrite it.

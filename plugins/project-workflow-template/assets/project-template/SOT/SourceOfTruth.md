@@ -1,5 +1,11 @@
 # Source of Truth — [프로젝트명]
 
+Project ID: [stable-project-id]
+Project name: [프로젝트명]
+Workspace type: standard-project
+Company workspace ID: [company-workspace-id | none]
+Status: [planned | active | blocked | on-hold | completed | cancelled]
+Owner: [owner]
 Last updated: YYYY-MM-DD
 
 ## 목적

@@ -20,8 +20,10 @@ Treat `01_INBOX` as a temporary drop box. Separate the read-only proposal from t
 - Put email, messenger, call notes, captures, and their attachments in one `02_SOURCE/COMMUNICATION_LOG/CNN_yyyy-mm-dd_topic` bundle per top-level communication item.
 - Keep an attachment with its communication. Split unrelated communication items into separate `CNN` bundles.
 - Put internal drafts, calculations, analysis, and editable working material in `03_WORK/WNN_yyyy-mm-dd_topic` or the existing `03_WORKS` equivalent.
+- During parallel work, route each independent workstream to a distinct `WNN`; never make parallel workers share one editable work folder.
 - Put formal agendas, minutes, decisions, and follow-up records in `05_MEETING`.
 - Put no unissued draft in `04_OUTPUT`. Use a new `OUTNN` only after actual sending or official sharing is confirmed.
+- During parallel work, only the designated `04_OUTPUT` integrator/writer may create or populate an `OUTNN`. Other workers must leave the confirmed file and evidence in their own `WNN` for handoff.
 - When a file has multiple plausible roles, leave it in INBOX and show the competing destinations.
 
 ## Modes
@@ -81,6 +83,7 @@ Treat the current request itself as approval only when the human specifies both 
 
 - verify the number of moved items matches the approved items
 - verify every destination follows the applicable `CNN`, `WNN`, or `OUTNN` naming rule
+- verify parallel workstreams use distinct `WNN` folders and any `OUTNN` write was performed by the designated integrator
 - verify source and destination filenames match
 - verify every destination SHA-256 matches its pre-move source
 - verify moved originals no longer remain duplicated in `01_INBOX`

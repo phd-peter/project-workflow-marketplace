@@ -114,6 +114,38 @@ def stable_fingerprint(payload: Any) -> str:
     return sha256_bytes(encoded)
 
 
+def template_manifest() -> list[dict[str, str]]:
+    reject_symlinks(TEMPLATE_ROOT)
+    return [
+        {
+            "path": path.relative_to(TEMPLATE_ROOT).as_posix(),
+            "sha256": sha256_file(path),
+        }
+        for path in sorted(TEMPLATE_ROOT.rglob("*"), key=lambda item: item.as_posix())
+        if path.is_file()
+    ]
+
+
+def current_template_digest(manifest: list[dict[str, str]] | None = None) -> str:
+    files = manifest if manifest is not None else template_manifest()
+    return stable_fingerprint(
+        {
+            "templateVersion": plugin_version(),
+            "files": files,
+            "directories": [item.as_posix() for item in STANDARD_DIRS],
+        }
+    )
+
+
+def current_workflow_digest() -> str:
+    return stable_fingerprint(
+        {
+            "script": sha256_file(Path(__file__).resolve()),
+            "manifest": sha256_file(MANIFEST_PATH),
+        }
+    )
+
+
 def is_within(path: Path, parent: Path) -> bool:
     try:
         path.resolve().relative_to(parent.resolve())
@@ -205,19 +237,29 @@ def init_plan(target: Path) -> dict[str, Any]:
             "existingTopLevelEntries": children,
         }
     state = {"targetExists": target_exists, "children": children}
-    files = sorted(
-        path.relative_to(TEMPLATE_ROOT).as_posix()
-        for path in TEMPLATE_ROOT.rglob("*")
-        if path.is_file()
-    )
+    manifest = template_manifest()
+    files = [item["path"] for item in manifest]
+    directories = [item.as_posix() for item in STANDARD_DIRS]
+    template_digest = current_template_digest(manifest)
+    workflow_digest = current_workflow_digest()
+    fingerprint_payload = {
+        "action": "initialize",
+        "target": str(target.resolve()),
+        "templateVersion": plugin_version(),
+        "templateDigest": template_digest,
+        "workflowDigest": workflow_digest,
+        "state": state,
+    }
     return {
         "status": "planned",
         "action": "initialize",
         "target": str(target),
         "templateVersion": plugin_version(),
+        "templateDigest": template_digest,
+        "workflowDigest": workflow_digest,
         "files": files + [MARKER_REL.as_posix()],
-        "directories": [item.as_posix() for item in STANDARD_DIRS],
-        "fingerprint": stable_fingerprint(state),
+        "directories": directories,
+        "fingerprint": stable_fingerprint(fingerprint_payload),
         "state": state,
     }
 
@@ -228,6 +270,8 @@ def write_marker(target: Path, latest_backup: str | None, managed: dict[str, Any
         {
             "schemaVersion": 1,
             "templateVersion": plugin_version(),
+            "templateDigest": current_template_digest(),
+            "workflowDigest": current_workflow_digest(),
             "installedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
             "sourcePlugin": "project-workflow-template",
             "latestBackup": latest_backup,
@@ -242,7 +286,7 @@ def initialize(args: argparse.Namespace) -> None:
     if not args.apply or plan["status"] != "planned":
         emit(plan, 2 if plan["status"] == "requires_migration" else 0)
     if not args.expected_fingerprint or args.expected_fingerprint != plan["fingerprint"]:
-        emit({"status": "aborted", "reason": "Fingerprint mismatch; request a new initialization plan.", **plan}, 3)
+        emit({**plan, "status": "aborted", "reason": "Fingerprint mismatch; request a new initialization plan."}, 3)
 
     target.mkdir(parents=True, exist_ok=True)
     created: list[Path] = []
@@ -257,7 +301,7 @@ def initialize(args: argparse.Namespace) -> None:
                 created.append(destination)
         for relative in STANDARD_DIRS:
             (target / relative).mkdir(parents=True, exist_ok=True)
-        managed_paths = CORE_COMPONENTS + DOC_COMPONENTS + HOOK_COMPONENTS + [Path("SOT/SourceOfTruth.md")]
+        managed_paths = CORE_COMPONENTS + DOC_COMPONENTS + HOOK_COMPONENTS
         managed = {
             item.as_posix(): {
                 "templateHash": hash_path(TEMPLATE_ROOT / item),
@@ -318,22 +362,57 @@ def migration_plan(args: argparse.Namespace, target: Path) -> dict[str, Any]:
                     "templateHash": None,
                 }
             )
+    marker_path = target / MARKER_REL
+    marker_action = "keep"
+    marker_data: dict[str, Any] = {}
+    if marker_path.exists():
+        try:
+            loaded_marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_marker, dict):
+                marker_data = loaded_marker
+            else:
+                marker_action = "update-marker"
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            marker_action = "update-marker"
+    else:
+        marker_action = "create-marker"
+    if marker_data.get("templateVersion") != plugin_version():
+        marker_action = "update-marker" if marker_path.exists() else "create-marker"
+    if any(item["action"] != "keep" for item in operations):
+        marker_action = "update-marker" if marker_path.exists() else "create-marker"
+    operations.append(
+        {
+            "path": MARKER_REL.as_posix(),
+            "action": marker_action,
+            "currentHash": hash_path(marker_path),
+            "templateHash": None,
+        }
+    )
+    backup_root = Path(args.backup_root).expanduser().absolute() if args.backup_root else target.parent / "_project-workflow-backups"
+    template_digest = current_template_digest()
+    workflow_digest = current_workflow_digest()
     fingerprint_payload = {
+        "action": "migrate",
         "target": str(target),
-        "version": plugin_version(),
+        "templateVersion": plugin_version(),
+        "templateDigest": template_digest,
+        "workflowDigest": workflow_digest,
+        "backupRoot": str(backup_root.resolve()),
         "options": {
             "includeDocs": args.include_docs,
             "includeHooks": args.include_hooks,
             "createMissingFolders": args.create_missing_folders,
         },
         "current": current,
+        "operations": operations,
     }
-    backup_root = Path(args.backup_root).expanduser().absolute() if args.backup_root else target.parent / "_project-workflow-backups"
     return {
         "status": "planned",
         "action": "migrate",
         "target": str(target),
         "templateVersion": plugin_version(),
+        "templateDigest": template_digest,
+        "workflowDigest": workflow_digest,
         "backupRoot": str(backup_root),
         "operations": operations,
         "protectedPaths": PROTECTED_PATHS,
@@ -394,21 +473,10 @@ def migrate(args: argparse.Namespace) -> None:
     if not args.apply:
         emit(plan)
     if not args.expected_fingerprint or args.expected_fingerprint != plan["fingerprint"]:
-        emit({"status": "aborted", "reason": "Fingerprint mismatch; request a new migration plan.", **plan}, 3)
+        emit({**plan, "status": "aborted", "reason": "Fingerprint mismatch; request a new migration plan."}, 3)
 
     changed = [item for item in plan["operations"] if item["action"] not in {"keep"}]
     if not changed:
-        marker_path = target / MARKER_REL
-        marker = json.loads(marker_path.read_text(encoding="utf-8")) if marker_path.exists() else {}
-        if marker.get("templateVersion") != plugin_version():
-            managed = {
-                relative.as_posix(): {
-                    "templateHash": hash_path(TEMPLATE_ROOT / relative),
-                    "installedHash": hash_path(target / relative),
-                }
-                for relative in selected_components(args)
-            }
-            write_marker(target, marker.get("latestBackup"), managed)
         emit(
             {
                 "status": "already_current",
@@ -419,9 +487,7 @@ def migrate(args: argparse.Namespace) -> None:
             }
         )
     replace_paths = [Path(item["path"]) for item in changed]
-    backup_paths = list(replace_paths)
-    if MARKER_REL not in backup_paths:
-        backup_paths.append(MARKER_REL)
+    backup_paths = list(dict.fromkeys(replace_paths))
     backup_root = Path(plan["backupRoot"]).absolute()
     backup = unique_backup_path(backup_root, target)
     backup.mkdir(parents=True, exist_ok=False)
@@ -442,6 +508,8 @@ def migrate(args: argparse.Namespace) -> None:
             relative = Path(operation["path"])
             destination = target / relative
             action = operation["action"]
+            if relative == MARKER_REL:
+                continue
             if action == "create-directory":
                 destination.mkdir(parents=True, exist_ok=True)
                 continue
@@ -530,9 +598,9 @@ def restore(args: argparse.Namespace) -> None:
     if not args.apply:
         emit(plan)
     if not args.expected_fingerprint or args.expected_fingerprint != plan["fingerprint"]:
-        emit({"status": "aborted", "reason": "Fingerprint mismatch; request a new restore plan.", **plan}, 3)
+        emit({**plan, "status": "aborted", "reason": "Fingerprint mismatch; request a new restore plan."}, 3)
     if plan["conflicts"] and not args.force_conflicts:
-        emit({"status": "aborted", "reason": "Current files differ from the migrated state.", **plan}, 4)
+        emit({**plan, "status": "aborted", "reason": "Current files differ from the migrated state."}, 4)
 
     safety = backup / "restore-safety" / datetime.now().strftime("%Y%m%d-%H%M%S")
     safety.mkdir(parents=True, exist_ok=False)
@@ -562,19 +630,81 @@ def verify(args: argparse.Namespace) -> None:
     if not marker_path.is_file():
         emit({"status": "unmanaged", "target": str(target), "reason": "project-workflow.json was not found"}, 2)
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    if not isinstance(marker, dict):
+        emit({"status": "invalid-marker", "target": str(target), "reason": "Marker must be a JSON object."}, 5)
+    errors = []
+    if marker.get("schemaVersion") != 1:
+        errors.append("Marker schemaVersion must be 1.")
+    if marker.get("sourcePlugin") != "project-workflow-template":
+        errors.append("Marker sourcePlugin must be project-workflow-template.")
+    if marker.get("templateVersion") != plugin_version():
+        errors.append(
+            f"Marker templateVersion {marker.get('templateVersion') or '<missing>'} "
+            f"does not match plugin version {plugin_version()}."
+        )
+    expected_template_digest = current_template_digest()
+    expected_workflow_digest = current_workflow_digest()
+    if marker.get("templateDigest") != expected_template_digest:
+        errors.append("Marker templateDigest does not match the current template.")
+    if marker.get("workflowDigest") != expected_workflow_digest:
+        errors.append("Marker workflowDigest does not match the current workflow implementation.")
+    managed_components = marker.get("managedComponents")
+    if not isinstance(managed_components, dict) or not managed_components:
+        errors.append("Marker managedComponents must be a non-empty object.")
+        managed_components = {}
+    for required in CORE_COMPONENTS:
+        if required.as_posix() not in managed_components:
+            errors.append(f"Marker is missing required managed component: {required.as_posix()}.")
     results = []
-    for relative_text, hashes in marker.get("managedComponents", {}).items():
+    for relative_text, hashes in managed_components.items():
+        if not isinstance(hashes, dict):
+            errors.append(f"Managed component metadata must be an object: {relative_text}.")
+            continue
         current = hash_path(target / Path(relative_text))
         expected = hashes.get("installedHash")
         results.append({"path": relative_text, "currentHash": current, "installedHash": expected, "matches": current == expected})
-    clean = all(item["matches"] for item in results)
+    structure = []
+    required_files = [Path("SOT/SourceOfTruth.md")]
+    for relative in required_files:
+        path = target / relative
+        readable_utf8 = False
+        if path.is_file():
+            try:
+                path.read_text(encoding="utf-8", errors="strict")
+                readable_utf8 = True
+            except (OSError, UnicodeError):
+                pass
+        structure.append(
+            {
+                "path": relative.as_posix(),
+                "expectedKind": "file",
+                "matches": path.is_file() and readable_utf8,
+            }
+        )
+    for relative in STANDARD_DIRS:
+        path = target / relative
+        structure.append(
+            {
+                "path": relative.as_posix(),
+                "expectedKind": "directory",
+                "matches": path.is_dir(),
+            }
+        )
+    clean = not errors and all(item["matches"] for item in results) and all(item["matches"] for item in structure)
     emit(
         {
             "status": "verified" if clean else "drifted",
             "target": str(target),
             "templateVersion": marker.get("templateVersion"),
+            "pluginVersion": plugin_version(),
+            "templateDigest": marker.get("templateDigest"),
+            "pluginTemplateDigest": expected_template_digest,
+            "workflowDigest": marker.get("workflowDigest"),
+            "pluginWorkflowDigest": expected_workflow_digest,
             "latestBackup": marker.get("latestBackup"),
             "components": results,
+            "structure": structure,
+            "errors": errors,
         },
         0 if clean else 5,
     )

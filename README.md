@@ -36,6 +36,8 @@ codex plugin add project-workflow-template@project-workflow
 $initialize-project-workspace로 이 폴더의 초기화 계획을 보여줘.
 ```
 
+마켓플레이스 저장소, `assets/project-template`, 또는 기존 프로젝트 폴더 전체를 복사해 새 프로젝트를 만들지 않습니다. 빈 대상 루트마다 위 초기화 요청으로 계획과 fingerprint를 받은 뒤, 별도 메시지로 승인한 경우에만 적용합니다.
+
 기존 워크폴더에서는 교체 계획을 요청합니다.
 
 ```text
@@ -48,11 +50,13 @@ $migrate-project-workspace로 이 기존 워크폴더의 AGENTS.md와 로컬 스
 $migrate-project-workspace로 최근 외부 백업의 복원 계획을 보여줘.
 ```
 
-초기화와 마이그레이션은 먼저 읽기 전용 계획과 대상 fingerprint를 제시합니다. 사용자가 별도 메시지로 승인한 범위만 적용합니다.
+초기화와 마이그레이션은 먼저 읽기 전용 계획과 대상 fingerprint를 제시합니다. fingerprint는 정확한 대상·현재 상태·템플릿 버전·내용·실행 스크립트(마이그레이션은 옵션과 외부 백업 루트 포함)에 결합됩니다. 값이 달라지면 새 계획이 필요하며, 사용자가 별도 메시지로 승인한 범위만 적용합니다.
 
 ## 안전 경계
 
-- 기존 운영 파일은 워크폴더 바깥의 `_project-workflow-backups/<프로젝트명>/<시각>/`에 먼저 복사합니다.
+- 초기화된 루트 하나만 프로젝트 수준으로 사용하며, 기존 프로젝트 하위에는 독립 프로젝트를 초기화하지 않습니다.
+- 프로젝트 내부의 병렬 작업은 서로 다른 `03_WORK/WNN_yyyy-mm-dd_topic`에서 수행하고, SOT 반영안과 `04_OUTPUT`은 한 번에 한 명의 지정된 통합자/작성자만 기록합니다.
+- 기존 운영 파일은 워크폴더 바깥의 `_project-workflow-backups/<프로젝트명>-<경로해시8자>/<시각>/`에 먼저 복사합니다.
 - 백업과 원본의 SHA-256이 같은지 확인한 뒤에만 교체합니다.
 - `SOT`, `01_INBOX`, `02_SOURCE`, `03_WORK` 또는 `03_WORKS`, `04_OUTPUT`, `05_MEETING`, `06_KNOWLEDGE`의 프로젝트 자료는 마이그레이션하지 않습니다.
 - 다른 기존 훅은 보존하며, SOT 경고 훅은 공식 SOT를 자동으로 수정하지 않습니다.
