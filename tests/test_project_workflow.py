@@ -81,6 +81,13 @@ class WorkflowTestCase(unittest.TestCase):
         payload, clean = workflow.workspace_verification(canonical)
         self.assertTrue(clean, payload)
 
+    def test_project_template_defaults_deliverables_to_markdown(self) -> None:
+        template_agents = workflow.TEMPLATE_ROOT / "AGENTS.md"
+        content = template_agents.read_text(encoding="utf-8")
+        self.assertIn("산출물은 Markdown을 기본으로 작성한다.", content)
+        self.assertIn("사용자가 그 형식을 명시적으로 요청", content)
+        self.assertIn("단지 보기 좋게 만들기 위해 PDF로 다시 내보내지 않는다.", content)
+
     def test_initialization_fingerprint_binds_target_and_template_content(self) -> None:
         with tempfile.TemporaryDirectory() as temp_text:
             temp = Path(temp_text)
