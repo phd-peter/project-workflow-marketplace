@@ -40,6 +40,10 @@ HUMAN_WORKFLOW_GUIDE.md           사람이 수행·승인·검토할 전체 운
 2. **Codex, 전역 `AGENTS.md`, `project_scout` 설정이 이미 되어 있다면** [2. 이미 설정된 컴퓨터에서 시작](#2-이미-설정된-컴퓨터에서-시작)으로 바로 간다.
 3. **macOS 새 컴퓨터**라면 [3. macOS 새 컴퓨터에서 시작](#3-macos-새-컴퓨터에서-시작)부터 진행한다.
 
+## 팀 배포본으로 편입한 공유폴더
+
+팀원은 배포 담당자가 제공한 동일 버전을 각 PC에 설치하고 새 Codex 작업에서 공유 프로젝트 루트를 연다. 편입과 복원은 공유 호스트 담당자가 맡는다. 각 팀원은 자신의 작업폴더에서 `$record-work-handoff`로 인계 기록과 회의 시트에 붙일 한 줄을 작성한다.
+
 ## GitHub 플러그인 설치
 
 공개 저장소 [`phd-peter/project-workflow-marketplace`](https://github.com/phd-peter/project-workflow-marketplace)를 Codex 마켓플레이스로 등록하고 플러그인을 설치한다.

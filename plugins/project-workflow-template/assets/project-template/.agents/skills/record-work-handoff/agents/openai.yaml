@@ -1,0 +1,4 @@
+interface:
+  display_name: "팀 작업 인계"
+  short_description: "작업 근거를 정리하고 팀 현황표에 붙여넣을 한 행을 준비합니다."
+  default_prompt: "$record-work-handoff로 내 작업 인계와 팀 현황표에 붙일 TSV 한 행을 준비해줘."

@@ -1,11 +1,21 @@
 ---
 name: migrate-project-workspace
-description: Audit, migrate, restore, or verify an existing local project workspace. Use when the user asks to replace or update AGENTS.md and project-local skills, preserve the old operating files in an external backup, optionally sync workflow docs or hooks, roll back a migration, or check the installed template version without changing SOT or project evidence.
+description: Adopt an existing SMB team project with additive team skills, or audit, migrate, restore, or verify an existing local workspace. Use when the user asks to replace or update AGENTS.md and project-local skills, preserve the old operating files in an external backup, optionally sync workflow docs or hooks, roll back a migration, or check the installed template version without changing SOT or project evidence.
 ---
 
 # Migrate a project workspace
 
 Use the bundled deterministic script. The default migration replaces only `AGENTS.md` and the complete `.agents/skills` directory after external backup.
+
+## Adopt an existing shared team project
+
+When a user wants to keep an existing project and use the team workflow, use `migrate --team-smb`. Run maintenance on the sharing host using the same local absolute project path each time. Team members subsequently open that project's root over SMB. Select one project, not the parent containing several projects. Confirm that other writers have paused for apply or restore.
+
+1. Run the platform wrapper with `migrate --team-smb --target <absolute-local-project>`. Use the same explicit external `--backup-root` in plan and apply if requested.
+2. Present additions, existing content being retained, any collisions, and the proposed AGENTS section. Review the human meaning of existing instructions, especially project-specific approvals. Resolve conflicting rules with the project owner before apply.
+3. Apply only after a separate approval of the displayed target, plan and fingerprint, with identical options plus `--apply --expected-fingerprint <fingerprint>`. Do not switch to the default replacement migration to resolve a collision.
+4. Run `verify --target <same-absolute-local-project>`. Report the backup location and anything retained that requires human review. If a new placeholder SOT was added, use the project's SOT review procedure to establish its first official state.
+5. Have team members open the project from their PCs and invoke `$record-work-handoff` in their assigned work folders.
 
 ## Audit and migrate
 
@@ -30,10 +40,13 @@ Use the bundled deterministic script. The default migration replaces only `AGENT
 4. If files changed after migration, stop. Use `--force-conflicts` only after explicit approval to overwrite the listed conflicts.
 5. Preserve the external backup after restoration.
 
+For a team adoption backup, restore uses the same host path and checks every changed component. If the project has since activated the SOT, edited an installed file or added material under a folder created at adoption, review the reported conflicts. Team restore preserves those changes even if `--force-conflicts` is supplied. For an interrupted maintenance operation, inspect the external backup manifest and the owner/time in `.project-workflow-team-maintenance.lock` before any retry. A rollback that reports `needs-recovery` requires comparing the listed paths with the backup before further changes.
+
 ## Invariants
 
 - Target one project root only; never create or migrate a nested independent project inside another project.
-- Never change `SOT`, `01_INBOX`, `02_SOURCE`, `03_WORK`, `03_WORKS`, `04_OUTPUT`, `05_MEETING`, or `06_KNOWLEDGE`.
+- Team adoption may create the initial placeholder SOT only when absent and may create missing standard directories. Preserve existing project records.
+- The default replacement migration must never change `SOT`, `01_INBOX`, `02_SOURCE`, `03_WORK`, `03_WORKS`, `04_OUTPUT`, `05_MEETING`, or `06_KNOWLEDGE`.
 - Back up before replacing and verify copied backups by SHA-256.
 - Require the returned fingerprint during apply. It binds the target, selected options, external backup root, current component snapshot, template version, template content digest, and workflow implementation digest.
 - Reject a backup inside the target workspace.

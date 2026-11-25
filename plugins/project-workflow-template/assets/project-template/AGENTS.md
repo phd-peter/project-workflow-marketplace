@@ -22,6 +22,13 @@
 - 병렬 작업 중 `SOT/REVIEW/SourceOfTruth_반영안.md`와 `04_OUTPUT`에는 한 번에 한 명의 지정된 통합자/작성자(integrator/writer)만 쓸 수 있다. 그 외 작업자는 두 위치를 읽기 전용으로 취급하고 변경 후보를 자신의 `WNN`에 남긴다.
 - 통합자는 근거와 충돌을 확인한 뒤 SOT 승인 절차를 진행하고, 실제 송부·공식 공유가 확인된 정확한 파일만 새 `04_OUTPUT/OUTNN_yyyy-mm-dd_topic`에 보관한다.
 
+## 팀 일일 인계
+
+- 팀에서 이 절차를 채택한 경우 각 작업자는 자기 PC의 Codex에서 지정된 공유 프로젝트 루트를 열고 `.agents/skills/record-work-handoff/SKILL.md`를 사용한다. 작업 ID와 담당을 먼저 확인한다.
+- 원본·방법·산출물·검증·다음 행동은 담당 `WNN`의 기존 작업 기록에 작업 ID별로 갱신한다. 인계 위치가 없으면 해당 `WNN`에 `HANDOFF.md` 하나를 둔다. 아직 `WNN`이 없는 일은 확인된 정보로 현황 행을 준비할 수 있다. 같은 내용을 날짜별 업무 일지나 일일 회의록에 다시 적지 않는다.
+- 팀은 한 Google Sheets 현황표에서 프로젝트와 작업 ID로 같은 행을 찾아 최신 요약을 갱신한다. Codex는 근거가 있는 TSV 한 행을 준비하고 담당자가 확인해 직접 붙여넣는다. 정식 회의 기록과 공식 프로젝트 상태에는 기존 절차가 적용된다.
+- 팀 현황에서 공식 상태에 반영할 변경이 있으면 작업자는 `WNN`에서 근거와 후보를 인계한다. 지정된 통합자 한 명이 공식 SOT 반영안을 다루고 사람이 기존 절차대로 승인한다.
+
 ## 폴더 경계
 
 - `01_INBOX`: 아직 확인하거나 분류하지 않은 자료의 임시 수신함이다. 분류가 완료된 원문은 적절한 프로젝트 폴더로 이동하며, 같은 원문을 INBOX에 중복 보관하지 않는다.
@@ -97,6 +104,7 @@
 - 프로젝트를 파악하고 업무를 이어갈 때 `.agents/skills/continue-project-work/SKILL.md`를 사용한다.
 - SOT의 생성·변경·승인·보류·폐기·이력 보관·복원에는 `.agents/skills/update-project-sot/SKILL.md`를 사용한다.
 - `01_INBOX`의 자료를 분류하거나 승인된 이동을 적용할 때 `.agents/skills/triage-project-inbox/SKILL.md`를 사용한다.
+- 팀의 작업 근거와 일일 현황표 행을 인계할 때 `.agents/skills/record-work-handoff/SKILL.md`를 사용한다.
 - 다른 프로젝트에서도 쓸 만한 교훈을 찾을 때 `.agents/skills/capture-project-learning/SKILL.md`를 사용한다.
 
 ## 검증 기준

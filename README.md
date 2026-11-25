@@ -5,6 +5,7 @@
 이 저장소의 `project-workflow-template` 플러그인은 다음을 지원합니다.
 
 - 빈 폴더에 표준 프로젝트 구조를 만드는 신규 초기화
+- 기존 공유 프로젝트의 원본·전용 규칙·사용자 스킬을 보존하는 팀 편입 및 작업 인계
 - 기존 워크폴더의 `AGENTS.md`와 `.agents/skills` 교체
 - 교체 전 프로젝트 외부 백업과 SHA-256 검증
 - 적용 이후 충돌을 확인하는 복원 절차
@@ -27,6 +28,22 @@ codex plugin add project-workflow-template@project-workflow
 codex plugin marketplace upgrade project-workflow
 codex plugin add project-workflow-template@project-workflow
 ```
+
+## SMB 공유 프로젝트에 팀 방식 적용
+
+1. 각 PC에서 같은 버전의 마켓플레이스를 설치하고 새 Codex 작업을 연다. 로컬 배포본은 압축을 해제하고 `.agents/plugins/marketplace.json`이 있는 폴더에서 다음 명령으로 설치할 수 있다.
+
+   ```powershell
+   codex plugin marketplace add .
+   codex plugin add project-workflow-template@project-workflow
+   ```
+
+2. 공유를 제공하는 PC에서 기존 자료가 들어 있는 **개별 프로젝트의 로컬 폴더**를 연다. PowerShell 7과 Python 3이 필요하다. 운영 담당자가 유지보수를 맡고 편입·복원 동안 해당 프로젝트의 작성을 잠시 멈춘다.
+3. Codex에 **“$migrate-project-workspace로 이 공유 프로젝트에 팀 협업 기능을 추가할 계획을 보여줘. --team-smb를 사용해.”**라고 요청한다. 기존 지침과 추가 구역, 설치할 스킬, 보존 또는 충돌 항목, 프로젝트 외부 백업 위치를 검토한다. 대상 경로와 fingerprint를 확인하고 별도 메시지로 승인한다. 적용과 검증, 추후 복원은 호스트의 같은 로컬 경로에서 진행한다.
+4. 팀원은 SMB에서 각 프로젝트의 루트를 열고 담당 작업폴더에서 작업한다. **“$record-work-handoff로 오늘 한 일과 시트에 붙일 한 줄을 정리해줘.”**라고 요청한다. 팀 시트에서 프로젝트명과 작업 ID가 같은 행을 갱신한다. 원본과 공식 상태는 프로젝트 안에 둔다.
+5. 서로 다른 팀원 두 명이 각자 작업폴더에 쓴 뒤, 상대가 시트의 프로젝트 상대 경로로 근거를 여는지 확인한다. SOT 반영은 통합자 한 명이 맡고 별도 승인을 받는다.
+
+공개 마켓플레이스와 팀 배포본의 버전이 다르면 팀에 전달된 같은 로컬 배포본을 사용한다. 플러그인 설치는 각 PC에서, 팀 편입은 프로젝트마다 한 번 진행한다.
 
 ## 사용
 
@@ -77,7 +94,7 @@ plugins/project-workflow-template/
 
 ## 호환성
 
-- Windows: PowerShell 7 스크립트와 훅을 실제 검증합니다.
-- macOS: zsh 스크립트와 훅을 포함합니다. 현재 Windows 배포 환경에서는 macOS 실제 실행 검증이 별도 항목으로 남습니다.
+- Windows에서는 PowerShell 7 래퍼를 사용합니다. 기존 폴더에는 `migrate --team-smb`로 편입합니다. 신규 `initialize --apply`는 Windows에서 지원하지 않습니다.
+- macOS에는 zsh 래퍼가 있습니다. 실제 공유 권한과 서로 다른 Windows 계정의 동시 작업은 대상 SMB에서 확인합니다.
 
 현재 저장소에는 라이선스가 지정되어 있지 않습니다.

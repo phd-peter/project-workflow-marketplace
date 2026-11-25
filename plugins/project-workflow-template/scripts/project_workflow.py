@@ -12,7 +12,10 @@ import os
 import secrets
 import stat
 import shutil
+import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,8 +24,12 @@ from typing import Any
 SCRIPT_ROOT = Path(__file__).resolve().parent
 PLUGIN_ROOT = SCRIPT_ROOT.parent
 TEMPLATE_ROOT = PLUGIN_ROOT / "assets" / "project-template"
+TEAM_SECTION = PLUGIN_ROOT / "assets" / "team-smb" / "AGENTS.section.md"
 MANIFEST_PATH = PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
 MARKER_REL = Path(".codex/project-workflow.json")
+SOT_REL = Path("SOT/SourceOfTruth.md")
+AGENTS_REL = Path("AGENTS.md")
+SKILLS_REL = Path(".agents/skills")
 
 CORE_COMPONENTS = [Path("AGENTS.md"), Path(".agents/skills")]
 DOC_COMPONENTS = [Path("README.md"), Path("HUMAN_WORKFLOW_GUIDE.md")]
@@ -74,6 +81,12 @@ def path_identity(path: Path, *, include_ctime: bool = False) -> dict[str, int]:
     return identity
 
 
+def is_link_or_reparse_point(metadata: os.stat_result) -> bool:
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    )
+
+
 def reject_path_symlinks(path: Path) -> None:
     """Reject symlinks in every existing component of a target path."""
     for component in (path, *path.parents):
@@ -81,8 +94,8 @@ def reject_path_symlinks(path: Path) -> None:
             metadata = component.lstat()
         except FileNotFoundError:
             continue
-        if stat.S_ISLNK(metadata.st_mode):
-            raise WorkflowError(f"Symbolic links are not supported in the target path: {component}")
+        if is_link_or_reparse_point(metadata):
+            raise WorkflowError(f"Symbolic links are not supported in the target path, including Windows reparse points: {component}")
 
 
 def canonical_initialization_target(path: Path) -> Path:
@@ -348,8 +361,10 @@ def copy_exact(source: Path, destination: Path) -> None:
 
 
 def safe_relative_parts(relative: Path) -> tuple[str, ...]:
-    if relative.is_absolute() or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+    if relative.anchor or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
         raise WorkflowError(f"Unsafe relative staging path: {relative}")
+    if os.name == "nt" and any(":" in part or part.endswith((" ", ".")) for part in relative.parts):
+        raise WorkflowError(f"Unsafe Windows staging path: {relative}")
     return relative.parts
 
 
@@ -1166,8 +1181,535 @@ def restore_entries(target: Path, backup: Path, entries: list[dict[str, Any]]) -
             copy_exact(backup / "files" / relative, destination)
 
 
+def team_path_kind(target: Path, relative: Path) -> str:
+    """Inspect only the proposed path and its immediate ancestor chain."""
+    current = target
+    for part in safe_relative_parts(relative):
+        current /= part
+        try:
+            metadata = current.lstat()
+            mode = metadata.st_mode
+        except FileNotFoundError:
+            return "missing"
+        except NotADirectoryError:
+            return "blocked"
+        if is_link_or_reparse_point(metadata):
+            return "symlink-or-reparse-point"
+    if stat.S_ISDIR(mode):
+        return "directory"
+    if stat.S_ISREG(mode):
+        return "file"
+    return "other"
+
+
+def team_snapshot(target: Path, relative: Path) -> tuple[str, str | None]:
+    kind = team_path_kind(target, relative)
+    return kind, sha256_file(target / relative) if kind == "file" else None
+
+
+def team_section_bytes() -> bytes:
+    return TEAM_SECTION.read_bytes().strip(b"\r\n")
+
+
+def team_section_matches(content: bytes) -> bool:
+    section = team_section_bytes()
+    start, end = section.splitlines()[0], section.splitlines()[-1]
+    lines = content.replace(b"\r\n", b"\n").splitlines()
+    if lines.count(start) != 1 or lines.count(end) != 1:
+        return False
+    return b"\n".join(lines[lines.index(start):lines.index(end) + 1]) == section.replace(b"\r\n", b"\n")
+
+
+def is_utf8_file(path: Path) -> bool:
+    try:
+        path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def team_migration_plan(
+    args: argparse.Namespace, target: Path
+) -> tuple[dict[str, Any], dict[Path, bytes | None], dict[str, Any]]:
+    if not target.is_dir():
+        raise WorkflowError(f"Target directory does not exist: {target}")
+    if args.include_docs or args.include_hooks or args.create_missing_folders:
+        raise WorkflowError("Team SMB adoption selects its own additive scope; omit the standard migration options")
+    backup_root = (
+        Path(args.backup_root).expanduser().absolute()
+        if args.backup_root else target.parent / "_project-workflow-backups"
+    )
+    reject_path_symlinks(backup_root)
+    if is_within(backup_root, target):
+        raise WorkflowError("Backup root must be outside the target workspace")
+
+    operations: list[dict[str, Any]] = []
+    collisions: list[dict[str, Any]] = []
+    writes: dict[Path, bytes | None] = {}
+    managed: dict[str, str] = {}
+    required_dirs: set[Path] = set()
+
+    def collide(path: Path, reason: str, *, blocking: bool = True) -> None:
+        collisions.append({"path": path.as_posix(), "reason": reason, "blocking": blocking})
+
+    def operation(
+        path: Path, action: str, kind: str, before: str | None, after: str | None,
+    ) -> None:
+        operations.append({
+            "path": path.as_posix(), "action": action, "currentKind": kind,
+            "currentHash": before, "templateHash": after,
+        })
+
+    def add_dirs(path: Path) -> None:
+        for directory in reversed((path, *path.parents)):
+            if directory == Path(".") or directory in required_dirs:
+                continue
+            required_dirs.add(directory)
+            kind = team_path_kind(target, directory)
+            if kind == "missing":
+                writes[directory] = None
+                operation(directory, "create-directory", kind, None, None)
+            elif kind != "directory":
+                collide(directory, f"Expected a directory, found {kind}")
+                operation(directory, "collision", kind, None, None)
+
+    def add_file(
+        path: Path, content: bytes, *, manage: bool = False, preserve_custom: bool = False,
+    ) -> None:
+        add_dirs(path.parent)
+        kind, before = team_snapshot(target, path)
+        after = sha256_bytes(content)
+        if kind == "missing":
+            writes[path] = content
+            operation(path, "create", kind, before, after)
+        elif kind == "file" and (preserve_custom or before == after):
+            operation(path, "keep", kind, before, after)
+            if preserve_custom and before != after:
+                collide(path, "Existing customized file is preserved; review it with the team instructions", blocking=False)
+        else:
+            collide(path, f"Existing {kind} prevents installing this file")
+            operation(path, "collision", kind, before, after)
+            return
+        if manage and (kind == "missing" or before == after):
+            managed[path.as_posix()] = after
+
+    for parent in target.parents:
+        if (parent / MARKER_REL).exists() or (
+            (parent / AGENTS_REL).is_file() and (parent / SOT_REL).is_file()
+        ):
+            collide(parent, "Target is inside an existing project workspace")
+            break
+
+    work = Path("03_WORKS") if team_path_kind(target, Path("03_WORKS")) == "directory" and (
+        team_path_kind(target, Path("03_WORK")) == "missing"
+    ) else Path("03_WORK")
+    for path in STANDARD_DIRS:
+        add_dirs(work if path == Path("03_WORK") else path)
+    add_dirs(SKILLS_REL)
+    add_dirs(MARKER_REL.parent)
+
+    kind, before = team_snapshot(target, AGENTS_REL)
+    section = team_section_bytes()
+    first, last = section.splitlines()[0], section.splitlines()[-1]
+    if kind in {"file", "missing"}:
+        existing = (
+            (target / AGENTS_REL).read_bytes()
+            if kind == "file" else (TEMPLATE_ROOT / AGENTS_REL).read_bytes()
+        )
+        try:
+            existing.decode("utf-8")
+        except UnicodeDecodeError:
+            collide(AGENTS_REL, "Existing instructions are not UTF-8")
+        else:
+            if team_section_matches(existing):
+                if kind == "missing":
+                    writes[AGENTS_REL] = existing
+                operation(
+                    AGENTS_REL, "create" if kind == "missing" else "keep",
+                    kind, before, sha256_bytes(existing),
+                )
+            elif first in existing or last in existing:
+                collide(AGENTS_REL, "Existing bounded team instructions differ or are incomplete")
+                operation(AGENTS_REL, "collision", kind, before, None)
+            else:
+                separator = b"" if not existing else b"\n" if existing.endswith(b"\n") else b"\n\n"
+                content = existing + separator + section + b"\n"
+                writes[AGENTS_REL] = content
+                operation(
+                    AGENTS_REL, "append-team-section" if kind == "file" else "create",
+                    kind, before, sha256_bytes(content),
+                )
+    else:
+        collide(AGENTS_REL, f"Expected a text file, found {kind}")
+
+    sot_kind = team_path_kind(target, SOT_REL)
+    if sot_kind == "file" and is_utf8_file(target / SOT_REL):
+        # The active SOT is project evidence, not an installed component.
+        operation(SOT_REL, "keep", sot_kind, None, None)
+    elif sot_kind == "missing":
+        sot_content = (TEMPLATE_ROOT / SOT_REL).read_bytes()
+        if work == Path("03_WORKS"):
+            sot_content = sot_content.replace(b"03_WORK/", b"03_WORKS/")
+        add_file(SOT_REL, sot_content)
+    elif sot_kind == "file":
+        collide(SOT_REL, "Existing official SOT is not UTF-8")
+    else:
+        collide(SOT_REL, f"Expected an official SOT file, found {sot_kind}")
+
+    guide = Path("HUMAN_WORKFLOW_GUIDE.md")
+    guide_kind = team_path_kind(target, guide)
+    if guide_kind == "missing" or (guide_kind == "file" and is_utf8_file(target / guide)):
+        add_file(guide, (TEMPLATE_ROOT / guide).read_bytes(), preserve_custom=True)
+    elif guide_kind == "file":
+        collide(guide, "Existing workflow guide is not UTF-8")
+    else:
+        collide(guide, "Existing path prevents installing the workflow guide")
+
+    for source in sorted((TEMPLATE_ROOT / SKILLS_REL).iterdir()):
+        if not source.is_dir():
+            continue
+        skill = SKILLS_REL / source.name
+        bundled = {
+            skill / file.relative_to(source): file.read_bytes()
+            for file in sorted(source.rglob("*")) if file.is_file() and file.name != ".DS_Store"
+        }
+        skill_kind = team_path_kind(target, skill)
+        if skill_kind == "missing":
+            for path, content in bundled.items():
+                add_file(path, content, manage=True)
+            continue
+        if skill_kind != "directory" or any(
+            team_snapshot(target, path) != ("file", sha256_bytes(content))
+            for path, content in bundled.items()
+        ):
+            collide(
+                skill, "Existing skill differs from the bundled skill; the existing files are preserved",
+                blocking=source.name in {"record-work-handoff", "update-project-sot"},
+            )
+            operation(skill, "collision", skill_kind, None, None)
+            continue
+        for path, content in bundled.items():
+            add_file(path, content, manage=True)
+
+    old_marker: dict[str, Any] = {}
+    marker_kind, marker_hash = team_snapshot(target, MARKER_REL)
+    if marker_kind == "file":
+        try:
+            old_marker = json.loads((target / MARKER_REL).read_text(encoding="utf-8"))
+            if not isinstance(old_marker, dict) or old_marker.get("sourcePlugin") != "project-workflow-template":
+                raise ValueError("unrecognized marker")
+        except (ValueError, UnicodeError):
+            old_marker = {}
+            collide(MARKER_REL, "Existing marker is not a recognized project-workflow marker")
+    elif marker_kind != "missing":
+        collide(MARKER_REL, f"Expected a workflow marker file, found {marker_kind}")
+
+    team_metadata = {
+        "workDirectory": work.as_posix(),
+        "managedFiles": managed,
+        "requiredDirectories": sorted(path.as_posix() for path in required_dirs),
+        "sectionSha256": sha256_bytes(section),
+    }
+    metadata = {
+        "templateVersion": plugin_version(), "templateDigest": current_template_digest(),
+        "workflowDigest": current_workflow_digest(),
+    }
+    if writes or old_marker.get("teamSmb") != team_metadata or any(
+        old_marker.get(field) != value for field, value in metadata.items()
+    ):
+        operation(
+            MARKER_REL, "create-marker" if marker_kind == "missing" else "update-marker",
+            marker_kind, marker_hash, stable_fingerprint(team_metadata),
+        )
+    plan: dict[str, Any] = {
+        "status": "blocked" if any(item["blocking"] for item in collisions) else "planned",
+        "action": "migrate", "teamSmb": True, "target": str(target),
+        "targetIdentity": path_identity(target), "backupRoot": str(backup_root),
+        **metadata, "workDirectory": work.as_posix(),
+        "operations": operations, "collisions": collisions, "protectedPaths": PROTECTED_PATHS,
+    }
+    plan["fingerprint"] = stable_fingerprint(plan)
+    return plan, writes, {**old_marker, "teamSmb": team_metadata}
+
+
+def require_local_team_filesystem(path: Path) -> None:
+    """Team mutation is a host maintenance action, never a client SMB write."""
+    if os.name == "nt":
+        # GetDriveType distinguishes a physical drive from a mapped SMB letter.
+        from ctypes import wintypes
+
+        drive_type = ctypes.windll.kernel32.GetDriveTypeW
+        drive_type.argtypes = [wintypes.LPCWSTR]
+        drive_type.restype = wintypes.UINT
+        if len(path.anchor) == 3 and path.anchor[1:3] == ":\\" and drive_type(path.anchor) == 3:
+            return
+    elif sys.platform == "darwin":
+        mounts = subprocess.run(["/sbin/mount"], check=True, capture_output=True, text=True)
+        candidates = []
+        for line in mounts.stdout.splitlines():
+            source_and_mount, separator, options = line.rpartition(" (")
+            if separator and " on " in source_and_mount:
+                mount = Path(source_and_mount.split(" on ", 1)[1])
+                if path.is_relative_to(mount):
+                    candidates.append((mount, options.rstrip(")").split(", ")))
+        if candidates and "local" in max(candidates, key=lambda item: len(item[0].parts))[1]:
+            return
+    elif sys.platform.startswith("linux"):
+        existing = next(item for item in (path, *path.parents) if item.exists())
+        result = subprocess.run(
+            ["stat", "-f", "-c", "%T", "--", str(existing)],
+            check=True, capture_output=True, text=True,
+        )
+        if result.stdout.strip() not in {"smb", "smb2", "cifs", "nfs", "nfs4", "9p", "fuse", "autofs"}:
+            return
+    raise WorkflowError("Run team SMB maintenance on the host's local filesystem")
+
+
+@contextmanager
+def team_maintenance_lock(target: Path):
+    require_local_team_filesystem(target)
+    identity = path_identity(target)
+    lock = target / ".project-workflow-team-maintenance.lock"
+    try:
+        fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as error:
+        raise WorkflowError(f"Team maintenance lock already exists; inspect its owner before retrying: {lock}") from error
+    lock_identity = stat_identity(os.fstat(fd))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(f"pid={os.getpid()}\nstarted={datetime.now().astimezone().isoformat()}\n")
+        if path_identity(target) != identity:
+            raise WorkflowError("Project root changed during maintenance")
+        yield
+    finally:
+        try:
+            if path_identity(target) == identity and path_identity(lock) == lock_identity:
+                lock.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def windows_replace_team_file(path: Path, staged: Path) -> None:
+    from ctypes import wintypes
+
+    replace_file = ctypes.WinDLL("kernel32", use_last_error=True).ReplaceFileW
+    replace_file.argtypes = [
+        wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR,
+        wintypes.DWORD, wintypes.LPVOID, wintypes.LPVOID,
+    ]
+    replace_file.restype = wintypes.BOOL
+    recovery = path.parent / f".project-workflow-original-{secrets.token_hex(12)}"
+    # Supplying a recovery name keeps the original recoverable even if Windows
+    # fails after renaming it. Zero flags require preservation of its DACL.
+    if not replace_file(str(path), str(staged), str(recovery), 0, None, None):
+        failure = ctypes.WinError(ctypes.get_last_error())
+        if recovery.exists() and not path.exists():
+            os.rename(recovery, path)
+        if recovery.exists():
+            raise WorkflowError(f"Windows could not replace {path}; original recovery file: {recovery}. {failure}")
+        raise failure
+    try:
+        recovery.unlink()
+    except OSError as error:
+        raise WorkflowError(f"Windows published {path}, but could not remove the original recovery file: {recovery}") from error
+
+
+def team_replace_file(path: Path, content: bytes, *, expected_hash: str | None) -> None:
+    """Publish an entire file at once, without overwriting a new path."""
+    fd, name = tempfile.mkstemp(prefix=".project-workflow-", dir=path.parent)
+    staged = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            if expected_hash is not None and os.name != "nt":
+                if sys.platform == "darwin":
+                    subprocess.run(["/bin/cp", "-p", str(path), str(staged)], check=True, capture_output=True)
+                else:
+                    shutil.copystat(path, staged, follow_symlinks=False)
+            elif os.name != "nt":
+                os.fchmod(stream.fileno(), 0o644)
+            stream.write(content)
+            stream.flush()
+            stream.truncate()
+            os.fsync(stream.fileno())
+        if expected_hash is not None:
+            if is_link_or_reparse_point(path.lstat()) or sha256_file(path) != expected_hash:
+                raise WorkflowError(f"File changed during team maintenance: {path}")
+            if os.name == "nt":
+                windows_replace_team_file(path, staged)
+            else:
+                os.replace(staged, path)
+        elif os.name == "nt":
+            os.rename(staged, path)
+        else:
+            os.link(staged, path)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def team_set_path(
+    target: Path,
+    relative: Path,
+    expected: tuple[str, str | None],
+    desired: tuple[str, bytes | None],
+) -> None:
+    if team_snapshot(target, relative) != expected:
+        raise WorkflowError(f"Team path changed during maintenance: {relative.as_posix()}")
+    path = target / relative
+    current_kind = expected[0]
+    next_kind, content = desired
+    if next_kind == "directory":
+        path.mkdir()
+    elif next_kind == "file":
+        assert content is not None
+        team_replace_file(path, content, expected_hash=expected[1])
+    elif current_kind == "directory":
+        # Refuse to remove unexpected project data added independently.
+        path.rmdir()
+    elif current_kind == "file":
+        path.unlink()
+
+
+def team_entry_state(entry: dict[str, Any], stage: str) -> tuple[str, str | None]:
+    return entry[f"{stage}Kind"], entry[f"{stage}Hash"]
+
+
+def write_team_manifest(path: Path, manifest: dict[str, Any]) -> None:
+    content = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    team_replace_file(path, content, expected_hash=sha256_file(path) if path.is_file() else None)
+
+
+def team_backup(
+    target: Path, backup: Path, changes: list[tuple[Path, str, str | None, str, bytes | None]],
+) -> list[dict[str, Any]]:
+    entries = []
+    for relative, before_kind, before_hash, after_kind, content in changes:
+        if team_snapshot(target, relative) != (before_kind, before_hash):
+            raise WorkflowError(f"Team path has changed: {relative.as_posix()}")
+        if before_kind == "file":
+            destination = backup / "files" / relative
+            copy_exact(target / relative, destination)
+            if sha256_file(destination) != before_hash:
+                raise WorkflowError(f"Backup hash verification failed: {relative.as_posix()}")
+        entries.append({
+            "path": relative.as_posix(), "existed": before_kind != "missing", "kind": before_kind,
+            "beforeKind": before_kind, "beforeHash": before_hash,
+            "afterKind": after_kind, "afterHash": sha256_bytes(content) if content is not None else None,
+        })
+    return entries
+
+
+def team_commit(
+    target: Path, backup: Path, manifest: dict[str, Any],
+    changes: list[tuple[Path, str, str | None, str, bytes | None]],
+) -> None:
+    entries = manifest["entries"]
+    manifest_path = backup / "manifest.json"
+    manifest["state"] = "applying"
+    write_team_manifest(manifest_path, manifest)
+    applied = []
+    in_progress = None
+    try:
+        for (relative, before_kind, before_hash, after_kind, content), entry in zip(changes, entries):
+            in_progress = entry
+            team_set_path(target, relative, (before_kind, before_hash), (after_kind, content))
+            applied.append(entry)
+            in_progress = None
+        for entry in entries:
+            if team_snapshot(target, Path(entry["path"])) != team_entry_state(entry, "after"):
+                raise WorkflowError(f"Team write verification failed: {entry['path']}")
+        manifest["state"] = "committed"
+        write_team_manifest(manifest_path, manifest)
+    except Exception as original:
+        rollback_errors = []
+        if in_progress is not None:
+            relative = Path(in_progress["path"])
+            if team_snapshot(target, relative) != team_entry_state(in_progress, "before"):
+                rollback_errors.append(f"{relative.as_posix()}: changed during the failed action; verify before recovery")
+        for entry in reversed(applied):
+            relative = Path(entry["path"])
+            kind = entry["beforeKind"]
+            content = (backup / "files" / relative).read_bytes() if kind == "file" else None
+            try:
+                team_set_path(target, relative, team_entry_state(entry, "after"), (kind, content))
+            except (OSError, WorkflowError, subprocess.CalledProcessError) as error:
+                rollback_errors.append(f"{relative.as_posix()}: {error}")
+        manifest["state"] = "needs-recovery" if rollback_errors else "rolled-back"
+        manifest["rollbackErrors"] = rollback_errors
+        write_team_manifest(manifest_path, manifest)
+        if rollback_errors:
+            raise WorkflowError(f"Team maintenance failed: {original}. Recovery evidence: {manifest_path}") from original
+        raise
+
+
+def migrate_team(args: argparse.Namespace) -> None:
+    supplied = Path(args.target).expanduser().absolute()
+    if os.name == "nt":
+        reject_path_symlinks(supplied)
+        if args.apply:
+            require_local_team_filesystem(supplied)
+    target = canonical_initialization_target(supplied)
+    reject_path_symlinks(target)
+    plan, _, _ = team_migration_plan(args, target)
+    if not args.apply or plan["status"] == "blocked":
+        emit(plan, 2 if plan["status"] == "blocked" else 0)
+    if not args.expected_fingerprint or args.expected_fingerprint != plan["fingerprint"]:
+        emit({**plan, "status": "aborted", "reason": "Fingerprint mismatch; request a new team migration plan."}, 3)
+    with team_maintenance_lock(target):
+        plan, writes, marker = team_migration_plan(args, target)
+        if args.expected_fingerprint != plan["fingerprint"]:
+            emit({**plan, "status": "aborted", "reason": "Team plan changed while acquiring the maintenance lock."}, 3)
+        changed = [item for item in plan["operations"] if item["action"] not in {"keep", "collision"}]
+        if not changed:
+            emit({**plan, "status": "already_current", "backup": None})
+        backup_root = Path(plan["backupRoot"]).resolve()
+        require_local_team_filesystem(backup_root)
+        backup = unique_backup_path(backup_root, target)
+        backup.mkdir(mode=0o700, parents=True, exist_ok=False)
+        marker = {
+            **build_marker(
+                str(backup), {}, template_version=plan["templateVersion"],
+                template_digest=plan["templateDigest"], workflow_digest=plan["workflowDigest"],
+            ),
+            **marker,
+            "templateVersion": plan["templateVersion"],
+            "templateDigest": plan["templateDigest"],
+            "workflowDigest": plan["workflowDigest"],
+            "latestBackup": str(backup),
+        }
+        writes[MARKER_REL] = (json.dumps(marker, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+        changes = []
+        for item in changed:
+            relative = Path(item["path"])
+            content = writes[relative]
+            changes.append((
+                relative, item["currentKind"], item["currentHash"],
+                "directory" if content is None else "file", content,
+            ))
+        entries = team_backup(target, backup, changes)
+        manifest = {
+            "schemaVersion": 1, "pluginVersion": plugin_version(), "teamSmb": True,
+            "createdAt": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "projectPath": str(target), "projectIdentity": plan["targetIdentity"],
+            "fingerprint": plan["fingerprint"], "restoredAt": None, "entries": entries,
+        }
+        team_commit(target, backup, manifest, changes)
+        emit({**plan, "status": "migrated", "backup": str(backup)})
+
+
 def migrate(args: argparse.Namespace) -> None:
+    if getattr(args, "team_smb", False):
+        migrate_team(args)
+        return
     target = Path(args.target).expanduser().absolute()
+    if team_path_kind(target, MARKER_REL) == "file":
+        try:
+            marker = json.loads((target / MARKER_REL).read_text(encoding="utf-8"))
+        except UnicodeError:
+            marker = None
+        except json.JSONDecodeError:
+            marker = None
+        if isinstance(marker, dict) and "teamSmb" in marker:
+            raise WorkflowError("This project uses team SMB guidance; run migrate with --team-smb")
     plan = migration_plan(args, target)
     if not args.apply:
         emit(plan)
@@ -1291,8 +1833,111 @@ def restore_plan(args: argparse.Namespace, target: Path) -> tuple[dict[str, Any]
     )
 
 
+def team_restore_plan(target: Path, backup: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    reject_path_symlinks(backup)
+    if is_within(backup, target):
+        raise WorkflowError("Backup must be outside the target workspace")
+    relative_manifest = Path("manifest.json")
+    if team_path_kind(backup, relative_manifest) != "file":
+        raise WorkflowError(f"Team backup manifest is unavailable: {backup}")
+    manifest = json.loads((backup / relative_manifest).read_text(encoding="utf-8"))
+    if manifest.get("projectPath") != str(target) or manifest.get("projectIdentity") != path_identity(target):
+        raise WorkflowError("Backup manifest belongs to a different team project")
+    entries = {Path(entry["path"]): entry for entry in manifest["entries"]}
+    if len(entries) != len(manifest["entries"]):
+        raise WorkflowError("Team backup contains duplicate paths")
+    conflicts = []
+    current = []
+    if manifest.get("state") != "committed" or manifest.get("restoredAt"):
+        conflicts.append({"path": "manifest.json", "reason": "Backup is no longer an active committed migration"})
+    for relative, entry in entries.items():
+        safe_relative_parts(relative)
+        before_kind = entry["beforeKind"]
+        after_kind = entry["afterKind"]
+        controls = {AGENTS_REL, MARKER_REL, SOT_REL, Path("HUMAN_WORKFLOW_GUIDE.md")}
+        workspace_dirs = {*STANDARD_DIRS, Path("SOT"), Path("02_SOURCE"), Path("03_WORKS"),
+                          Path(".agents"), SKILLS_REL, MARKER_REL.parent, Path("06_KNOWLEDGE")}
+        path_within_skills = SKILLS_REL in relative.parents
+        allowed = (
+            before_kind == "missing" and (
+                (after_kind == "directory" and (relative in workspace_dirs or path_within_skills))
+                or (after_kind == "file" and (relative in controls or path_within_skills))
+            )
+        ) or (before_kind == after_kind == "file" and relative in {AGENTS_REL, MARKER_REL})
+        if not allowed:
+            raise WorkflowError(f"Backup entry is outside the team adoption scope: {relative.as_posix()}")
+        kind, digest = team_snapshot(target, relative)
+        current.append({"path": relative.as_posix(), "kind": kind, "hash": digest})
+        if (kind, digest) != team_entry_state(entry, "after"):
+            conflicts.append({"path": relative.as_posix(), "reason": "Current path differs from the adopted state"})
+        elif kind == "directory":
+            for child in sorted((target / relative).iterdir()):
+                child_relative = child.relative_to(target)
+                if child_relative not in entries:
+                    conflicts.append({"path": child_relative.as_posix(), "reason": "Directory contains new project data"})
+        if entry["beforeKind"] == "file" and team_snapshot(
+            backup, Path("files") / relative
+        ) != team_entry_state(entry, "before"):
+            conflicts.append({"path": relative.as_posix(), "reason": "Backup content is missing or differs"})
+    plan = {
+        "status": "planned", "action": "restore", "teamSmb": True,
+        "target": str(target), "backup": str(backup), "conflicts": conflicts,
+        "canApply": not conflicts,
+        "fingerprint": stable_fingerprint({
+            "target": str(target), "backup": str(backup),
+            "current": current, "manifest": manifest, "conflicts": conflicts,
+        }),
+    }
+    return plan, manifest
+
+
+def restore_team(args: argparse.Namespace, target: Path, backup: Path) -> None:
+    reject_path_symlinks(target)
+    plan, _ = team_restore_plan(target, backup)
+    if not args.apply:
+        emit(plan)
+    with team_maintenance_lock(target):
+        require_local_team_filesystem(backup)
+        plan, manifest = team_restore_plan(target, backup)
+        if not args.expected_fingerprint or args.expected_fingerprint != plan["fingerprint"]:
+            emit({**plan, "status": "aborted", "reason": "Fingerprint mismatch; request a new team restore plan."}, 3)
+        if not plan["canApply"]:
+            emit({**plan, "status": "aborted", "reason": "Team restore would overwrite changes or remove new project data."}, 4)
+        changes = []
+        for entry in reversed(manifest["entries"]):
+            path = Path(entry["path"])
+            content = (backup / "files" / path).read_bytes() if entry["beforeKind"] == "file" else None
+            if content is not None and sha256_bytes(content) != entry["beforeHash"]:
+                raise WorkflowError(f"Team backup file changed: {path.as_posix()}")
+            changes.append((path, entry["afterKind"], entry["afterHash"], entry["beforeKind"], content))
+        safety_parent = backup / "restore-safety"
+        reject_path_symlinks(safety_parent)
+        safety_parent.mkdir(exist_ok=True)
+        safety = Path(tempfile.mkdtemp(prefix="team-", dir=safety_parent))
+        safety_manifest = {
+            "schemaVersion": 1, "projectPath": str(target), "action": "restore-safety",
+            "fingerprint": plan["fingerprint"], "entries": team_backup(target, safety, changes),
+        }
+        team_commit(target, safety, safety_manifest, changes)
+        manifest["restoredAt"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        manifest["latestRestoreSafety"] = str(safety)
+        write_team_manifest(backup / "manifest.json", manifest)
+        emit({**plan, "status": "restored", "restoreSafetyBackup": str(safety), "backupPreserved": True})
+
+
 def restore(args: argparse.Namespace) -> None:
     target = Path(args.target).expanduser().absolute()
+    selected_backup = locate_backup(target, args.backup)
+    candidate_manifest = selected_backup / "manifest.json"
+    if candidate_manifest.is_file():
+        marker = json.loads(candidate_manifest.read_text(encoding="utf-8"))
+        if isinstance(marker, dict) and marker.get("teamSmb") is True:
+            if os.name == "nt":
+                reject_path_symlinks(target)
+                if args.apply:
+                    require_local_team_filesystem(target)
+            restore_team(args, canonical_initialization_target(target), selected_backup)
+            return
     plan, backup, manifest = restore_plan(args, target)
     if not args.apply:
         emit(plan)
@@ -1621,8 +2266,70 @@ def workspace_verification_at(
     )
 
 
+def team_verification(target: Path, marker: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    team = marker["teamSmb"]
+    errors = []
+    results = []
+    if marker.get("schemaVersion") != 1 or marker.get("sourcePlugin") != "project-workflow-template":
+        errors.append("Unrecognized team workflow marker.")
+    if marker.get("templateVersion") != plugin_version():
+        errors.append("Team workflow template version differs.")
+    if marker.get("templateDigest") != current_template_digest():
+        errors.append("Team workflow template content differs.")
+    if marker.get("workflowDigest") != current_workflow_digest():
+        errors.append("Team workflow implementation differs.")
+    if not isinstance(team, dict):
+        raise WorkflowError("Team workflow marker metadata must be an object")
+    if team.get("workDirectory") not in {"03_WORK", "03_WORKS"}:
+        errors.append("Unrecognized work directory.")
+    required_dirs = team["requiredDirectories"]
+    managed_files = team["managedFiles"]
+    if not isinstance(required_dirs, list) or not isinstance(managed_files, dict):
+        raise WorkflowError("Invalid team workflow marker inventory")
+    for name in required_dirs:
+        results.append({"path": name, "matches": team_path_kind(target, Path(name)) == "directory"})
+    for name, digest in managed_files.items():
+        results.append({"path": name, "matches": team_snapshot(target, Path(name)) == ("file", digest)})
+    for skill in ("record-work-handoff", "update-project-sot"):
+        path = (SKILLS_REL / skill / "SKILL.md").as_posix()
+        if path not in managed_files:
+            errors.append(f"Critical operating skill is missing from the installed inventory: {path}")
+    for relative in (AGENTS_REL, SOT_REL, Path("HUMAN_WORKFLOW_GUIDE.md")):
+        content = None
+        if team_path_kind(target, relative) == "file":
+            content = (target / relative).read_bytes()
+            try:
+                content.decode("utf-8")
+            except UnicodeDecodeError:
+                content = None
+        matches = content is not None
+        if relative == AGENTS_REL:
+            matches = matches and (
+                sha256_bytes(team_section_bytes()) == team.get("sectionSha256") and team_section_matches(content)
+            )
+        results.append({"path": relative.as_posix(), "matches": matches})
+    clean = not errors and all(item["matches"] for item in results)
+    return {
+        "status": "verified" if clean else "drifted", "target": str(target), "teamSmb": True,
+        "workDirectory": team.get("workDirectory"), "templateVersion": marker.get("templateVersion"),
+        "latestBackup": marker.get("latestBackup"), "errors": errors, "components": results,
+    }, clean
+
+
 def verify(args: argparse.Namespace) -> None:
-    target = canonical_initialization_target(Path(args.target))
+    supplied = Path(args.target).expanduser().absolute()
+    target = canonical_initialization_target(supplied)
+    if team_path_kind(target, MARKER_REL) == "file":
+        try:
+            marker = json.loads((target / MARKER_REL).read_text(encoding="utf-8"))
+        except (ValueError, UnicodeError):
+            marker = None
+        if isinstance(marker, dict) and "teamSmb" in marker:
+            if os.name == "nt":
+                reject_path_symlinks(supplied)
+            reject_path_symlinks(target)
+            payload, clean = team_verification(target, marker)
+            emit(payload, 0 if clean else 5)
     payload, clean = workspace_verification(target)
     emit(payload, 0 if clean else (2 if payload["status"] == "unmanaged" else 5))
 
@@ -1639,6 +2346,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     migrate_parser = subparsers.add_parser("migrate")
     migrate_parser.add_argument("--target", required=True)
+    migrate_parser.add_argument("--team-smb", action="store_true")
     migrate_parser.add_argument("--include-docs", action="store_true")
     migrate_parser.add_argument("--include-hooks", action="store_true")
     migrate_parser.add_argument("--create-missing-folders", action="store_true")
@@ -1667,7 +2375,7 @@ def main() -> None:
         args.handler(args)
     except WorkflowError as error:
         emit({"status": "error", "message": str(error)}, 1)
-    except (OSError, ValueError, json.JSONDecodeError) as error:
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
         emit({"status": "error", "message": str(error)}, 1)
 
 

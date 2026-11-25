@@ -1,7 +1,7 @@
 {
   "name": "project-workflow-template",
-  "version": "0.3.0",
-  "description": "Initialize, migrate, and restore file-based project workspaces with human approval and external backups.",
+  "version": "0.4.0",
+  "description": "Initialize, adopt shared team folders, migrate, and restore file-based project workspaces with human approval and external backups.",
   "author": {
     "name": "phd-peter"
   },
@@ -12,13 +12,13 @@
   "interface": {
     "displayName": "프로젝트 업무 워크플로우",
     "shortDescription": "새·기존 워크폴더를 승인형 절차로 구성합니다.",
-    "longDescription": "신규 프로젝트 폴더를 초기화하고 기존 워크폴더의 AGENTS와 로컬 스킬을 외부 백업 후 교체·복원합니다.",
+    "longDescription": "신규 프로젝트를 초기화하거나 기존 공유폴더에 팀 운영 규칙과 작업 인계를 추가합니다. 운영 파일 교체와 복원은 백업·승인 절차를 따릅니다.",
     "developerName": "phd-peter",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
     "defaultPrompt": [
       "새 워크폴더의 초기화 계획을 보여주세요.",
-      "기존 워크폴더의 AGENTS와 스킬 교체 계획을 보여주세요.",
+      "기존 공유 프로젝트에 팀 협업 기능을 추가하는 편입 계획을 보여주세요.",
       "최근 외부 백업에서 이전 환경을 복원할 계획을 보여주세요."
     ]
   }

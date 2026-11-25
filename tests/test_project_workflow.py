@@ -828,7 +828,7 @@ Last updated: 2026-07-31
             )
             self.assertEqual(before_hash, entry["beforeHash"])
             self.assertEqual(
-                "0.3.0",
+                workflow.plugin_version(),
                 json.loads(marker_path.read_text(encoding="utf-8"))["templateVersion"],
             )
 
