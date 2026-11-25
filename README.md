@@ -31,7 +31,7 @@ codex plugin add project-workflow-template@project-workflow
 
 ## SMB 공유 프로젝트에 팀 방식 적용
 
-1. 각 PC에서 같은 버전의 마켓플레이스를 설치하고 새 Codex 작업을 연다. 로컬 배포본은 압축을 해제하고 `.agents/plugins/marketplace.json`이 있는 폴더에서 다음 명령으로 설치할 수 있다.
+1. 프로젝트 편입·업데이트·복원을 맡은 PC에 플러그인을 설치하고 새 Codex 작업을 연다. 로컬 배포본은 압축을 해제하고 `.agents/plugins/marketplace.json`이 있는 폴더에서 다음 명령으로 설치할 수 있다.
 
    ```powershell
    codex plugin marketplace add .
@@ -43,7 +43,9 @@ codex plugin add project-workflow-template@project-workflow
 4. 팀원은 SMB에서 각 프로젝트의 루트를 열고 담당 작업폴더에서 작업한다. **“$record-work-handoff로 오늘 한 일과 시트에 붙일 한 줄을 정리해줘.”**라고 요청한다. 팀 시트에서 프로젝트명과 작업 ID가 같은 행을 갱신한다. 원본과 공식 상태는 프로젝트 안에 둔다.
 5. 서로 다른 팀원 두 명이 각자 작업폴더에 쓴 뒤, 상대가 시트의 프로젝트 상대 경로로 근거를 여는지 확인한다. SOT 반영은 통합자 한 명이 맡고 별도 승인을 받는다.
 
-공개 마켓플레이스와 팀 배포본의 버전이 다르면 팀에 전달된 같은 로컬 배포본을 사용한다. 플러그인 설치는 각 PC에서, 팀 편입은 프로젝트마다 한 번 진행한다.
+편입은 프로젝트마다 한 번 진행한다. 이후 팀원은 각자 Codex에서 같은 SMB 프로젝트 루트를 열어 그 안의 지침과 스킬을 사용한다. Python 분석 코드를 작성할 때는 루트의 `requirements.txt`에 Python 패치 버전과 직접·간접 패키지 버전을 고정하고, 각 PC의 로컬 venv에서 실행한다.
+
+v0.4.0으로 편입한 프로젝트는 운영 담당자가 새 플러그인으로 `migrate --team-smb` 계획을 다시 확인하고 승인한다. 팀이 직접 수정한 관리 구역은 충돌로 표시된다. 업데이트 후 팀원은 새 Codex 작업을 연다.
 
 ## 사용
 

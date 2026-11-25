@@ -149,6 +149,33 @@ $record-work-handoff로 내가 맡은 작업의 인계를 갱신해줘. 프로�
 
 기존 행의 담당·기한·상태 등은 근거가 있는 변경만 반영한다. 예를 들어 횡하중–층간변위각 작업에서 원시 파일과 그래프를 읽었더라도, 계측 기준거리를 확인하지 못했다면 `검증 대기`로 적고 `계측도에서 기준점과 기준거리 확인`을 다음 행동으로 둔다. 상세 근거는 `WNN`의 기존 작업 기록이나 `HANDOFF.md`에서 확인한다. 공식 상태·결정·의무 기한에 반영할 변경은 통합자에게 근거를 전달하고 [SOT 승인](#7-sot-승인) 절차를 따른다.
 
+### 팀원이 Python 분석을 처음 실행할 때
+
+1. Codex에서 공유 프로젝트 루트를 열고 `requirements.txt` 첫 줄의 `# Python==X.Y.Z`를 확인한다. 이 주석을 pip가 검사하지 않으므로 사용할 인터프리터의 `--version` 결과와 패치 번호까지 대조한다.
+2. 확인한 Python 실행 파일로 각 PC의 로컬 디스크에 프로젝트 전용 venv를 만든다. 아래 Windows PowerShell 예시는 PATH의 Python 버전을 확인한다. 다른 인터프리터를 쓰려면 `$PythonExe`에 해당 실행 파일의 절대 경로를 지정하고, `프로젝트ID`는 해당 프로젝트의 고유 이름으로 바꾼다. 현재 폴더는 공유 프로젝트 루트다.
+
+   ```powershell
+   $ExpectedPython = Get-Content ./requirements.txt -Encoding utf8 -TotalCount 1
+   $PythonExe = (Get-Command python -CommandType Application | Select-Object -First 1).Source
+   $VersionProbe = 'import platform; print("# Python==" + platform.python_version())'
+   $ActualPython = & $PythonExe -c $VersionProbe
+   if ($LASTEXITCODE -ne 0 -or $ActualPython -cne $ExpectedPython) { throw "Python 버전 확인 필요: $ExpectedPython" }
+
+   $VenvDir = Join-Path $env:LOCALAPPDATA 'project-workflow/venvs/프로젝트ID'
+   & $PythonExe -m venv $VenvDir
+   if ($LASTEXITCODE -ne 0) { throw "로컬 venv 생성 실패" }
+   $AnalysisPython = Join-Path $VenvDir 'Scripts/python.exe'
+   $LocalPython = & $AnalysisPython -c $VersionProbe
+   if ($LASTEXITCODE -ne 0 -or $LocalPython -cne $ExpectedPython) { throw "로컬 venv 버전 불일치" }
+   & $AnalysisPython -m pip install --no-deps -r ./requirements.txt
+   if ($LASTEXITCODE -ne 0) { throw "잠금 패키지 설치 실패" }
+   & $AnalysisPython -m pip check
+   if ($LASTEXITCODE -ne 0) { throw "의존성 검사 실패" }
+   ```
+
+3. 설치와 의존성 검사가 성공하면 같은 `$AnalysisPython`으로 담당 작업폴더의 분석 코드를 실행한다. 이미 있는 로컬 환경은 같은 잠금으로 준비한 경우에 재사용한다. 잠금이 바뀌면 새 로컬 venv에서 재검증한다.
+4. 최초 코드를 작성할 때는 팀이 사용할 Python·운영체제에 맞는 깨끗한 환경에서 필요한 패키지를 설치하고, 실제 설치된 직접·간접 의존성 전체를 정확한 버전으로 기록한다. 개인 환경의 전체 패키지, 로컬 파일 경로, 인증 정보는 잠금에 넣지 않는다. 동료가 같은 잠금으로 설치하고 대표 입력을 실행할 수 있는지 확인한다.
+
 ## 5. 소통과 회의
 
 - 소통 원문과 첨부는 한 번 `COMMUNICATION_LOG`에 들어가면 영구 원본이다.

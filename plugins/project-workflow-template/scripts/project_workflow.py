@@ -25,6 +25,8 @@ SCRIPT_ROOT = Path(__file__).resolve().parent
 PLUGIN_ROOT = SCRIPT_ROOT.parent
 TEMPLATE_ROOT = PLUGIN_ROOT / "assets" / "project-template"
 TEAM_SECTION = PLUGIN_ROOT / "assets" / "team-smb" / "AGENTS.section.md"
+# SHA-256 of the bounded section as shipped in the v0.4.0 tag, excluding outer line endings.
+V040_TEAM_SECTION_SHA256 = "e5e79a29a26fef833aed17ba9c247ad68848b65a6df778d32b553b26700bcf06"
 MANIFEST_PATH = PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
 MARKER_REL = Path(".codex/project-workflow.json")
 SOT_REL = Path("SOT/SourceOfTruth.md")
@@ -1211,13 +1213,45 @@ def team_section_bytes() -> bytes:
     return TEAM_SECTION.read_bytes().strip(b"\r\n")
 
 
+def team_section_span(content: bytes, section: bytes) -> slice | None:
+    """Locate exactly one ordered marker pair, excluding surrounding line endings."""
+    lines = section.splitlines()
+    start_marker, end_marker = lines[0], lines[-1]
+    if content.count(start_marker) != 1 or content.count(end_marker) != 1:
+        return None
+    offset = 0
+    start = None
+    for line in content.splitlines(keepends=True):
+        body = line.removesuffix(b"\n").removesuffix(b"\r")
+        if body == start_marker:
+            start = offset
+        elif body == end_marker:
+            return slice(start, offset + len(end_marker)) if start is not None else None
+        offset += len(line)
+    return None
+
+
 def team_section_matches(content: bytes) -> bool:
     section = team_section_bytes()
-    start, end = section.splitlines()[0], section.splitlines()[-1]
-    lines = content.replace(b"\r\n", b"\n").splitlines()
-    if lines.count(start) != 1 or lines.count(end) != 1:
-        return False
-    return b"\n".join(lines[lines.index(start):lines.index(end) + 1]) == section.replace(b"\r\n", b"\n")
+    span = team_section_span(content, section)
+    return span is not None and (
+        content[span].replace(b"\r\n", b"\n") == section.replace(b"\r\n", b"\n")
+    )
+
+
+def is_released_v040_team_section(marker: dict[str, Any], section: bytes) -> bool:
+    team = marker.get("teamSmb")
+    section_lf = section.replace(b"\r\n", b"\n")
+    return (
+        marker.get("schemaVersion") == 1
+        and marker.get("templateVersion") == "0.4.0"
+        and isinstance(team, dict)
+        and sha256_bytes(section_lf) == V040_TEAM_SECTION_SHA256
+        and team.get("sectionSha256") in (
+            V040_TEAM_SECTION_SHA256,
+            sha256_bytes(section_lf.replace(b"\n", b"\r\n")),
+        )
+    )
 
 
 def is_utf8_file(path: Path) -> bool:
@@ -1308,6 +1342,19 @@ def team_migration_plan(
     add_dirs(SKILLS_REL)
     add_dirs(MARKER_REL.parent)
 
+    old_marker: dict[str, Any] = {}
+    marker_kind, marker_hash = team_snapshot(target, MARKER_REL)
+    if marker_kind == "file":
+        try:
+            old_marker = json.loads((target / MARKER_REL).read_text(encoding="utf-8"))
+            if not isinstance(old_marker, dict) or old_marker.get("sourcePlugin") != "project-workflow-template":
+                raise ValueError("unrecognized marker")
+        except (ValueError, UnicodeError):
+            old_marker = {}
+            collide(MARKER_REL, "Existing marker is not a recognized project-workflow marker")
+    elif marker_kind != "missing":
+        collide(MARKER_REL, f"Expected a workflow marker file, found {marker_kind}")
+
     kind, before = team_snapshot(target, AGENTS_REL)
     section = team_section_bytes()
     first, last = section.splitlines()[0], section.splitlines()[-1]
@@ -1321,13 +1368,21 @@ def team_migration_plan(
         except UnicodeDecodeError:
             collide(AGENTS_REL, "Existing instructions are not UTF-8")
         else:
-            if team_section_matches(existing):
+            span = team_section_span(existing, section)
+            bounded = existing[span] if span is not None else b""
+            section_lf = section.replace(b"\r\n", b"\n")
+            if bounded.replace(b"\r\n", b"\n") == section_lf:
                 if kind == "missing":
                     writes[AGENTS_REL] = existing
                 operation(
                     AGENTS_REL, "create" if kind == "missing" else "keep",
                     kind, before, sha256_bytes(existing),
                 )
+            elif kind == "file" and span is not None and is_released_v040_team_section(old_marker, bounded):
+                newline = b"\r\n" if bounded.split(b"\n", 1)[0].endswith(b"\r") else b"\n"
+                content = existing[:span.start] + section_lf.replace(b"\n", newline) + existing[span.stop:]
+                writes[AGENTS_REL] = content
+                operation(AGENTS_REL, "replace-team-section", kind, before, sha256_bytes(content))
             elif first in existing or last in existing:
                 collide(AGENTS_REL, "Existing bounded team instructions differ or are incomplete")
                 operation(AGENTS_REL, "collision", kind, before, None)
@@ -1390,19 +1445,6 @@ def team_migration_plan(
             continue
         for path, content in bundled.items():
             add_file(path, content, manage=True)
-
-    old_marker: dict[str, Any] = {}
-    marker_kind, marker_hash = team_snapshot(target, MARKER_REL)
-    if marker_kind == "file":
-        try:
-            old_marker = json.loads((target / MARKER_REL).read_text(encoding="utf-8"))
-            if not isinstance(old_marker, dict) or old_marker.get("sourcePlugin") != "project-workflow-template":
-                raise ValueError("unrecognized marker")
-        except (ValueError, UnicodeError):
-            old_marker = {}
-            collide(MARKER_REL, "Existing marker is not a recognized project-workflow marker")
-    elif marker_kind != "missing":
-        collide(MARKER_REL, f"Expected a workflow marker file, found {marker_kind}")
 
     team_metadata = {
         "workDirectory": work.as_posix(),

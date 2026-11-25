@@ -18,6 +18,17 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1] / "plugins/project-workflow-te
 SCRIPT = PLUGIN_ROOT / "scripts/project_workflow.py"
 SOT = "SOT/SourceOfTruth.md"
 HANDOFF_SKILL = ".agents/skills/record-work-handoff/SKILL.md"
+V040_TEAM_SECTION = (
+    "<!-- project-workflow:team-smb:start -->\n"
+    "## 공유폴더 팀 작업\n"
+    "\n"
+    "- 팀원은 각자 Codex에서 같은 프로젝트 루트를 열고 배정받은 `03_WORK/WNN_날짜_주제`에서 작업한다. 기존 `03_WORKS`도 같은 의미로 사용한다. 통합자가 작업 번호와 담당자를 배정한다.\n"
+    "- 기존 파일은 원래 위치를 근거로 인용한다. 새 수신물은 `01_INBOX`, 분류한 원본과 소통 증빙은 `02_SOURCE`, 실제 송부·공식 공유한 산출물은 `04_OUTPUT`에 둔다.\n"
+    "- 산출물·계산·판단을 인계할 때 `.agents/skills/record-work-handoff/SKILL.md`를 따른다. 입력, 처리 방법, 결과 파일, 검증과 다음 행동을 담당 작업폴더에 남긴다. 팀 시트에서 프로젝트명과 작업 ID로 기존 행을 찾아 갱신한다.\n"
+    "- 작업 종료 시 프로젝트 상태·마감·결정·대기 사항의 변경을 확인하고 해당 근거를 작업폴더에 남긴다. 통합자 한 명이 `.agents/skills/update-project-sot/SKILL.md`에 따라 반영안을 모은다. 사람이 완성된 반영안을 별도 메시지로 승인한 뒤 공식 `SOT/SourceOfTruth.md`를 갱신한다.\n"
+    "- 프로젝트 기존 승인·발행 절차와 충돌하는 지침은 통합자가 검토한다. 공용 위치는 지정된 작성자 한 명이 변경한다.\n"
+    "<!-- project-workflow:team-smb:end -->"
+).encode("utf-8")
 
 
 class TeamSMBTests(unittest.TestCase):
@@ -165,6 +176,75 @@ class TeamSMBTests(unittest.TestCase):
         self.assertEqual("aborted", result["status"])
         self.assertEqual(edited, self.snapshot(self.target))
         self.assertFalse(self.backup_root.exists())
+
+    def test_upgrade_replaces_only_the_released_v040_section_and_can_be_restored(self) -> None:
+        prefix = "\ufeff# 프로젝트 승인 규칙\r\n\r\n".encode("utf-8")
+        suffix = "\r\n\r\n## 프로젝트별 인계\n\n공식 절차 유지  ".encode("utf-8")
+        old_crlf = V040_TEAM_SECTION.replace(b"\n", b"\r\n")
+        agents_before = prefix + old_crlf + suffix
+        agents = self.write("AGENTS.md", agents_before)
+        marker_before = {
+            "schemaVersion": 1,
+            "sourcePlugin": "project-workflow-template",
+            "templateVersion": "0.4.0",
+            "teamSmb": {"sectionSha256": hashlib.sha256(old_crlf).hexdigest()},
+        }
+        self.write(".codex/project-workflow.json", json.dumps(marker_before).encode("utf-8"))
+        original = self.snapshot(self.target)
+
+        plan = self.migrate()
+        agents_operation = next(item for item in plan["operations"] if item["path"] == "AGENTS.md")
+        self.assertEqual("replace-team-section", agents_operation["action"])
+        self.assertEqual(original, self.snapshot(self.target))
+        self.assertFalse(self.backup_root.exists())
+        result = self.migrate("--apply", "--expected-fingerprint", plan["fingerprint"])
+        current = (PLUGIN_ROOT / "assets/team-smb/AGENTS.section.md").read_bytes().strip(b"\r\n")
+        current_crlf = current.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        self.assertEqual(prefix + current_crlf + suffix, agents.read_bytes())
+        self.assertEqual(agents_before, (Path(result["backup"]) / "files/AGENTS.md").read_bytes())
+        self.command("verify")
+        rerun = self.migrate()
+        self.assertEqual(
+            "already_current",
+            self.migrate("--apply", "--expected-fingerprint", rerun["fingerprint"])["status"],
+        )
+
+        restore = self.command("restore")
+        self.assertTrue(restore["canApply"], restore)
+        self.command("restore", "--apply", "--expected-fingerprint", restore["fingerprint"])
+        self.assertEqual(original, self.snapshot(self.target))
+
+    def test_upgrade_blocks_custom_or_ambiguous_sections_even_with_a_matching_old_marker(self) -> None:
+        changed = V040_TEAM_SECTION.replace(b"\n## ", b"\n## Local ", 1)
+        start, end = V040_TEAM_SECTION.splitlines()[0], V040_TEAM_SECTION.splitlines()[-1]
+        released_digest = hashlib.sha256(V040_TEAM_SECTION).hexdigest()
+        cases = {
+            "locally edited": (changed, released_digest),
+            "forged marker hash": (changed, hashlib.sha256(changed).hexdigest()),
+            "duplicate": (V040_TEAM_SECTION + b"\n" + start, released_digest),
+            "partial": (V040_TEAM_SECTION.removesuffix(end), released_digest),
+            "missing installation proof": (V040_TEAM_SECTION, None),
+        }
+        for case, (section, digest) in cases.items():
+            with self.subTest(case=case):
+                self.write("AGENTS.md", b"# Local instructions\n\n" + section)
+                marker = {
+                    "schemaVersion": 1,
+                    "sourcePlugin": "project-workflow-template",
+                    "templateVersion": "0.4.0",
+                    "teamSmb": {"sectionSha256": digest},
+                }
+                self.write(".codex/project-workflow.json", json.dumps(marker).encode("utf-8"))
+                original = self.snapshot(self.target)
+
+                plan = self.migrate(code=2)
+                self.assertTrue(any(
+                    collision["path"] == "AGENTS.md" and collision["blocking"]
+                    for collision in plan["collisions"]
+                ), plan)
+                self.migrate("--apply", "--expected-fingerprint", plan["fingerprint"], code=2)
+                self.assertEqual(original, self.snapshot(self.target))
+                self.assertFalse(self.backup_root.exists())
 
     def test_critical_skill_collision_blocks_without_replacing_existing_skill(self) -> None:
         self.write(HANDOFF_SKILL, b"# Team's existing handoff command\n")
